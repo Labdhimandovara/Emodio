@@ -1,15 +1,54 @@
-# Emodio: AI Vocal Biomakers For Telepathy
+# Emodio: AI Vocal Biomarkers For Telepathy
+ 
+Transform voices into emotional insights using AI.
 
-**Transform voices into emotional insights with AI**
+## Overview
 
-## What is Telepathy?
+**Emodio – Telepathy** is a real-time voice emotion recognition system that analyzes human speech and predicts emotional states using deep learning.  
+The project provides a **complete end-to-end pipeline**, including model training, prediction, and a live graphical user interface (GUI).
 
-Telepathy is an AI-powered emotion detection system that analyzes voice recordings to identify emotional states. Using deep learning LSTM networks, it can detect 5 core emotions: **neutral, happy, sad, angry, and fearful**.
+This system is built as a **research and deployment prototype**, focusing on real-time processing and interpretability rather than clinical accuracy.
+
+##  What is Telepathy?
+
+In this project, **Telepathy** refers to the AI’s ability to infer human emotional states from vocal patterns.  
+Using LSTM-based deep learning models, the system identifies emotional cues embedded in speech.
+
+### Supported Emotions
+- Neutral  
+- Happy  
+- Sad  
+- Angry  
+- Fearful
 
 ## Current Status
 
-⚠️ **Prototype Stage** - Model needs training and testing
+ **Prototype Stage**
 
+- Trained on limited datasets  
+- Accuracy is not clinically validated  
+- Intended as a **baseline research pipeline** for emotion recognition  
+
+---
+
+##  Project Structure
+
+```text
+emodio/
+│
+├── realtime_gui_clean.py      # Real-time emotion recognition GUI
+├── predict_voice.py           # Feature extraction and prediction logic
+├── train_lstm.py              # LSTM model training script
+│
+├── model_augmented.h5         # Trained LSTM model
+├── scaler.pkl                 # Feature scaler
+├── label_encoder.pkl          # Emotion label encoder
+│
+├── emodio.png / elephant.jpg  # Optional GUI logo
+├── requirements.txt
+└── README.md
+
+```
 ## Quick Start
 
 ### Install Dependencies
@@ -27,6 +66,18 @@ python3 train_lstm.py
 python3 predict_voice.py
 ```
 
+## Run Real-Time GUI
+```bash
+python realtime_gui.py
+```
+
+## Datasets Used
+
+This project uses publicly available emotion speech datasets:
+
+-RAVDESS (Ryerson Audio-Visual Database of Emotional Speech and Song)
+-CREMA-D (Crowd-sourced Emotional Multimodal Actors Dataset)
+
 ## Business Potential
 
 This technology can power:
@@ -42,5 +93,7 @@ This technology can power:
 - **Deep Learning:** TensorFlow/Keras LSTM
 - **Audio Processing:** Librosa
 - **Features:** MFCC, Chroma, Spectral Contrast, Tonnetz
+
+
 
 
