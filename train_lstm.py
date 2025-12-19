@@ -1,4 +1,5 @@
 import os
+import argparse
 import numpy as np
 import librosa
 from sklearn.preprocessing import LabelEncoder, StandardScaler
@@ -11,8 +12,8 @@ import joblib
 # ==============================
 # CONFIG
 # ==============================
-RAVDESS_PATH = r"C:\dsp_project\act 1-24"
-CREMAD_PATH = r"C:\dsp_project\AudioWAV"
+RAVDESS_PATH = r"C:\Users\mando\Downloads\emodio\ravdess"
+CREMAD_PATH = r"C:\Users\mando\Downloads\emodio\cremad\AudioWAV"
 
 DURATION = 5          # seconds
 SAMPLE_RATE = 22050*2
@@ -35,18 +36,164 @@ RAVDESS_EMOTIONS = {
 
 # CREMA-D emotion mapping
 CREMAD_EMOTIONS = {
-    "NE": "neutral",
-    "HA": "happy",
-    "SA": "sad",
-    "AN": "angry",
-    "FE": "fearful",
-    "DI": "disgust"
+    "ANG": "angry",
+    "HAP": "happy",
+    "SAD": "sad",
+    "FEA": "fearful",
+    "DIS": "disgust",
+    "NEU": "neutral"
 }
+
+
 
 features = []
 labels = []
 
 print("Script started!")
+
+def main():
+    parser = argparse.ArgumentParser(description="Train LSTM on emotion audio datasets")
+    parser.add_argument('--data-dir', type=str, default='', help='Root folder with subfolders per emotion (overrides dataset-specific paths)')
+    parser.add_argument('--ravdess-path', type=str, default=RAVDESS_PATH, help='Path to RAVDESS root')
+    parser.add_argument('--cremad-path', type=str, default=CREMAD_PATH, help='Path to CREMA-D wav folder')
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--batch-size', type=int, default=32)
+    parser.add_argument('--synthetic-test', action='store_true', help='Run a synthetic-data smoke test instead of loading files')
+    parser.add_argument('--classes', nargs='+', default=[], help='List of class names to use for synthetic test (default: common emotions)')
+    parser.add_argument('--synthetic-samples', type=int, default=20, help='Samples per class for synthetic test')
+    args = parser.parse_args()
+
+    global RAVDESS_PATH, CREMAD_PATH
+    RAVDESS_PATH = args.ravdess_path
+    CREMAD_PATH = args.cremad_path
+
+    # -----------------------------
+    # Load features
+    # -----------------------------
+    features = []
+    labels = []
+
+    if args.data_dir:
+        print(f"Loading data from folder-per-class root: {args.data_dir}")
+        feats, labs = load_data_from_folder_per_class(args.data_dir, SAMPLE_RATE)
+        features.extend(feats)
+        labels.extend(labs)
+    elif args.synthetic_test:
+        class_names = args.classes if len(args.classes) > 0 else COMMON_EMOTIONS
+        print(f"Generating synthetic dataset for classes: {class_names} ({args.synthetic_samples} samples/class)")
+        feats, labs = synthetic_dataset(class_names, samples_per_class=args.synthetic_samples)
+        features.extend(feats)
+        labels.extend(labs)
+    else:
+        print("Using dataset-specific paths for RAVDESS and CREMA-D")
+
+        # ==============================
+        # FEATURE EXTRACTION: RAVDESS
+        # ==============================
+        if os.path.exists(RAVDESS_PATH):
+            for actor_folder in os.listdir(RAVDESS_PATH):
+                actor_folder_path = os.path.join(RAVDESS_PATH, actor_folder)
+                if not os.path.isdir(actor_folder_path):
+                    continue
+                for file in os.listdir(actor_folder_path):
+                    # skip non-wav files and malformed names
+                    if not file.lower().endswith('.wav'):
+                        continue
+                    parts = file.split("-")
+                    if len(parts) < 3:
+                        continue
+                    file_path = os.path.join(actor_folder_path, file)
+                    emotion_code = parts[2]
+                    emotion = RAVDESS_EMOTIONS.get(emotion_code)
+                    if emotion not in COMMON_EMOTIONS:
+                        continue
+                    try:
+                        feats = extract_features(file_path, SAMPLE_RATE)
+                        features.append(feats)
+                        labels.append(emotion)
+                    except Exception as e:
+                        print(f"Skipping RAVDESS file {file_path} due to error: {e}")
+        else:
+            print(f"RAVDESS path not found: {RAVDESS_PATH} (skipping)")
+
+        # ==============================
+        # FEATURE EXTRACTION: CREMA-D
+        # ==============================
+        if os.path.exists(CREMAD_PATH):
+            for file in os.listdir(CREMAD_PATH):
+                if not file.lower().endswith(".wav"):
+                    continue
+                try:
+                    parts = file.split("_")
+                    if len(parts) < 3:
+                        continue
+                    emotion_code = parts[2].upper().strip()  # ANG, HAP, SAD, FEA, DIS, NEU
+                    emotion = CREMAD_EMOTIONS.get(emotion_code)
+
+                    if emotion not in COMMON_EMOTIONS:
+                        continue
+
+                    file_path = os.path.join(CREMAD_PATH, file)
+                    feats = extract_features(file_path, SAMPLE_RATE)
+                    features.append(feats)
+                    labels.append(emotion)
+
+                except Exception as e:
+                    print(f"Skipping CREMA-D file {file} due to error: {e}")
+        else:
+            print(f"CREMA-D path not found: {CREMAD_PATH} (skipping)")
+
+
+
+    # -----------------------------
+    # PREPROCESSING
+    # -----------------------------
+    if len(features) == 0 or len(labels) == 0:
+        raise ValueError("No valid audio files found. Check your dataset paths and files!")
+
+    max_len = max([f.shape[0] for f in features])
+    features_padded = np.array([np.pad(f, ((0, max_len - f.shape[0]), (0,0)), mode='constant') for f in features])
+
+    X = features_padded
+    y = np.array(labels)
+
+    # Encode labels
+    le = LabelEncoder()
+    y_encoded = le.fit_transform(y)
+    y_categorical = to_categorical(y_encoded)
+
+    # Scale features
+    num_samples, time_steps, num_features = X.shape
+    X_2d = X.reshape(num_samples, time_steps*num_features)
+    scaler = StandardScaler()
+    X_scaled_2d = scaler.fit_transform(X_2d)
+    X_scaled = X_scaled_2d.reshape(num_samples, time_steps, num_features)
+
+    # Save scaler & label encoder
+    joblib.dump(scaler, "scaler.pkl")
+    joblib.dump(le, "label_encoder.pkl")
+
+    # ==============================
+    # LSTM MODEL
+    # ==============================
+    model = Sequential()
+    model.add(LSTM(128, input_shape=(X_scaled.shape[1], X_scaled.shape[2]), return_sequences=True))
+    model.add(Dropout(0.3))
+    model.add(LSTM(64))
+    model.add(Dropout(0.3))
+    model.add(Dense(y_categorical.shape[1], activation='softmax'))
+
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    checkpoint = ModelCheckpoint("model_augmented.h5", monitor='loss', save_best_only=True, verbose=1)
+
+    # ==============================
+    # TRAIN
+    # ==============================
+    model.fit(X_scaled, y_categorical, epochs=args.epochs, batch_size=args.batch_size, callbacks=[checkpoint])
+
+    print("Training completed! Model saved as model_augmented.h5")
+
 
 # ==============================
 # DATA AUGMENTATION FUNCTIONS
@@ -91,91 +238,59 @@ def extract_features(file_path, sample_rate):
     combined = np.vstack([mfccs, chroma, spec_contrast, tonnetz]).T
     return combined
 
-# ==============================
-# FEATURE EXTRACTION: RAVDESS
-# ==============================
-for actor_folder in os.listdir(RAVDESS_PATH):
-    actor_folder_path = os.path.join(RAVDESS_PATH, actor_folder)
-    if not os.path.isdir(actor_folder_path):
-        continue
-    for file in os.listdir(actor_folder_path):
-        file_path = os.path.join(actor_folder_path, file)
-        emotion_code = file.split("-")[2]
-        emotion = RAVDESS_EMOTIONS.get(emotion_code)
-        if emotion not in COMMON_EMOTIONS:
+
+def synthetic_dataset(class_names, samples_per_class=20, duration=DURATION, sample_rate=SAMPLE_RATE):
+    """Generate a tiny synthetic dataset using noise + augmentations for smoke-testing the pipeline."""
+    feats = []
+    labs = []
+    for label in class_names:
+        for i in range(samples_per_class):
+            # start with low-amplitude noise as a base 'audio'
+            data = np.random.normal(0, 0.01, int(duration * sample_rate))
+        
+
+            # extract features directly from array using librosa (no file)
+            try:
+                mfccs = librosa.feature.mfcc(y=data, sr=sample_rate, n_mfcc=N_MFCC)
+                stft = np.abs(librosa.stft(data))
+                chroma = librosa.feature.chroma_stft(S=stft, sr=sample_rate)
+                spec_contrast = librosa.feature.spectral_contrast(S=stft, sr=sample_rate)
+                tonnetz = librosa.feature.tonnetz(y=librosa.effects.harmonic(data), sr=sample_rate)
+                combined = np.vstack([mfccs, chroma, spec_contrast, tonnetz]).T
+                feats.append(combined)
+                labs.append(label)
+            except Exception as e:
+                print(f"Synthetic sample generation failed: {e}")
+    return feats, labs
+
+
+def load_data_from_folder_per_class(root_dir, sample_rate):
+    """Load audio files organized as root_dir/<label>/*.wav"""
+    feats = []
+    labs = []
+    if not root_dir:
+        return feats, labs
+    if not os.path.exists(root_dir):
+        print(f"Warning: data dir not found: {root_dir}")
+        return feats, labs
+
+    for label in os.listdir(root_dir):
+        label_dir = os.path.join(root_dir, label)
+        if not os.path.isdir(label_dir):
             continue
-        try:
-            feats = extract_features(file_path, SAMPLE_RATE)
-            features.append(feats)
-            labels.append(emotion)
-        except Exception as e:
-            print(f"Skipping RAVDESS file {file_path} due to error: {e}")
+        for fname in os.listdir(label_dir):
+            if not fname.lower().endswith('.wav'):
+                continue
+            file_path = os.path.join(label_dir, fname)
+            try:
+                f = extract_features(file_path, sample_rate)
+                feats.append(f)
+                labs.append(label)
+            except Exception as e:
+                print(f"Skipping file {file_path} due to error: {e}")
+    return feats, labs
 
-# ==============================
-# FEATURE EXTRACTION: CREMA-D
-# ==============================
-for file in os.listdir(CREMAD_PATH):
-    if not file.endswith(".wav"):
-        continue
-    try:
-        emotion_code = file.split("_")[2]  # e.g., "ANG" in "1001_DFA_ANG_XX.wav"
-        emotion = CREMAD_EMOTIONS.get(emotion_code)
-        if emotion not in COMMON_EMOTIONS:
-            continue
-        file_path = os.path.join(CREMAD_PATH, file)
-        feats = extract_features(file_path, SAMPLE_RATE)
-        features.append(feats)
-        labels.append(emotion)
-    except Exception as e:
-        print(f"Skipping CREMA-D file {file_path} due to error: {e}")
 
-print("Feature extraction completed for both datasets with augmentation.")
+if __name__ == '__main__':
+    main()
 
-# ==============================
-# PREPROCESSING
-# ==============================
-max_len = max([f.shape[0] for f in features])
-features_padded = np.array([np.pad(f, ((0, max_len - f.shape[0]), (0,0)), mode='constant') for f in features])
-
-X = features_padded
-y = np.array(labels)
-
-if len(X) == 0 or len(y) == 0:
-    raise ValueError("No valid audio files found. Check your dataset paths and files!")
-
-# Encode labels
-le = LabelEncoder()
-y_encoded = le.fit_transform(y)
-y_categorical = to_categorical(y_encoded)
-
-# Scale features
-num_samples, time_steps, num_features = X.shape
-X_2d = X.reshape(num_samples, time_steps*num_features)
-scaler = StandardScaler()
-X_scaled_2d = scaler.fit_transform(X_2d)
-X_scaled = X_scaled_2d.reshape(num_samples, time_steps, num_features)
-
-# Save scaler & label encoder
-joblib.dump(scaler, "scaler.pkl")
-joblib.dump(le, "label_encoder.pkl")
-
-# ==============================
-# LSTM MODEL
-# ==============================
-model = Sequential()
-model.add(LSTM(128, input_shape=(X_scaled.shape[1], X_scaled.shape[2]), return_sequences=True))
-model.add(Dropout(0.3))
-model.add(LSTM(64))
-model.add(Dropout(0.3))
-model.add(Dense(y_categorical.shape[1], activation='softmax'))
-
-model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-
-checkpoint = ModelCheckpoint("model_augmented.h5", monitor='loss', save_best_only=True, verbose=1)
-
-# ==============================
-# TRAIN
-# ==============================
-model.fit(X_scaled, y_categorical, epochs=100, batch_size=32, callbacks=[checkpoint])
-
-print("Training completed! Model saved as model_augmented.h5")
